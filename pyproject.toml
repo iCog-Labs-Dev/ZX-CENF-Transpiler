@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "hypothesis>=6.100.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
