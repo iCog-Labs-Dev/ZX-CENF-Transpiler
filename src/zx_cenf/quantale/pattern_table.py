@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections import defaultdict
 from functools import cmp_to_key
 
-from zx_cenf.quantale.pattern_hash import is_valid_pattern
+from zx_cenf.quantale.pattern_hash import is_valid_pattern, make_context_key
 from zx_cenf.quantale.strategies import _lexicographic_better
 
 
@@ -67,18 +67,17 @@ def build_pattern_rule_table(
             )
         )
 
-        pooled[
-            (
-                row.pattern_hash,
-                row.rule,
-            )
-        ].append(improvement)
+        context_key = make_context_key(
+            row.pattern_hash,
+            row.competing_rules,
+        )
+        pooled[(context_key, row.rule)].append(improvement)
 
     by_pattern: dict = defaultdict(dict)
     counts: dict = defaultdict(dict)
 
     for (
-        pattern_hash,
+        context_key,
         rule,
     ), improvements in pooled.items():
 
@@ -95,42 +94,50 @@ def build_pattern_rule_table(
             for i in range(len(improvements[0]))
         )
 
-        by_pattern[pattern_hash][rule] = avg
-        counts[pattern_hash][rule] = n
+        by_pattern[context_key][rule] = avg
+        counts[context_key][rule] = n
 
     table: dict = {}
 
     diagnostics = {
         "n_patterns_pooled": len(
             {
-                pattern_hash
-                for pattern_hash, _rule
+                context_key
+                for context_key, _rule
                 in pooled.keys()
             }
         ),
         "n_patterns_with_enough_data": 0,
         "n_patterns_one_sided": 0,
+        "n_patterns_incomplete": 0,
         "n_patterns_learned": 0,
         "n_patterns_dropped_as_tie": 0,
         "per_pattern_avg_deltas": dict(by_pattern),
         "per_pattern_counts": dict(counts),
     }
 
-    for pattern_hash, rule_improvements in by_pattern.items():
+    for context_key, rule_improvements in by_pattern.items():
         diagnostics[
             "n_patterns_with_enough_data"
         ] += 1
 
-        # Only one rule has enough observations for this pattern.
-        if len(rule_improvements) < 2:
-            diagnostics[
-                "n_patterns_one_sided"
-            ] += 1
+        expected_rules = set(context_key[1])
+        supported_rules = set(rule_improvements)
+        is_one_sided = len(rule_improvements) < 2
+        if is_one_sided:
+            diagnostics["n_patterns_one_sided"] += 1
 
+        if supported_rules != expected_rules:
+            diagnostics["n_patterns_incomplete"] += 1
             if require_competition:
                 continue
 
-            table[pattern_hash] = next(
+        # Only one rule has enough observations for this pattern.
+        if is_one_sided:
+            if require_competition:
+                continue
+
+            table[context_key] = next(
                 iter(rule_improvements)
             )
 
@@ -164,7 +171,7 @@ def build_pattern_rule_table(
             )
             > 0
         ):
-            table[pattern_hash] = best_rule
+            table[context_key] = best_rule
 
             diagnostics[
                 "n_patterns_learned"
@@ -180,39 +187,30 @@ def build_pattern_rule_table(
 
 def pattern_overlap_report(
     train_rows: list,
-    test_hashes: list,
+    test_context_keys,
+    learned_table: dict | None = None,
 ) -> dict:
-    train_hashes = {
-        row.pattern_hash
+    train_keys = {
+        make_context_key(row.pattern_hash, row.competing_rules)
         for row in train_rows
-        if is_valid_pattern(row.pattern_hash)
+        if row.was_crossroad and is_valid_pattern(row.pattern_hash)
     }
 
-    train_crossroad_hashes = {
-        row.pattern_hash
-        for row in train_rows
-        if (
-            row.was_crossroad
-            and is_valid_pattern(row.pattern_hash)
-        )
+    test_keys = {
+        key
+        for key in test_context_keys
+        if isinstance(key, tuple) and is_valid_pattern(key[0])
     }
-
-    test_set = {
-        pattern_hash
-        for pattern_hash in test_hashes
-        if is_valid_pattern(pattern_hash)
-    }
+    train_hashes = {key[0] for key in train_keys}
+    test_hashes = {key[0] for key in test_keys}
+    learned_keys = set((learned_table or {}).keys())
 
     return {
         "n_unique_train_hashes": len(train_hashes),
-        "n_unique_train_crossroad_hashes": len(
-            train_crossroad_hashes
-        ),
-        "n_unique_test_hashes": len(test_set),
-        "n_overlap_all": len(
-            train_hashes & test_set
-        ),
-        "n_overlap_crossroad": len(
-            train_crossroad_hashes & test_set
-        ),
+        "n_unique_train_contexts": len(train_keys),
+        "n_unique_test_hashes": len(test_hashes),
+        "n_unique_test_contexts": len(test_keys),
+        "n_structural_overlap": len(train_hashes & test_hashes),
+        "n_decision_context_overlap": len(train_keys & test_keys),
+        "n_learned_context_overlap": len(learned_keys & test_keys),
     }

@@ -1,5 +1,6 @@
 data/toy/*.qasm
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.egg-info/
@@ -13,3 +14,4 @@ build/
 data/track1_results/
 phase_f_result.txt
 data/track3_results/
+docs/
